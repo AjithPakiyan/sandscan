@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+  <title>SandScan · Live Grain Map</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Syne:wght@400;500;700&display=swap" rel="stylesheet"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <style>
+    *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+    :root{
+      --bg:#f4f5f7;--surface:#fff;--surface2:#f0f1f3;
+      --border:rgba(0,0,0,0.08);--border-strong:rgba(0,0,0,0.15);
+      --text:#1a1b1e;--muted:#7a7d85;
+      --fine:#1a6fc4;--medium:#2e8a1e;--coarse:#c42020;--accent:#b07c00;
+      --r:12px;--rs:8px;
+      --fd:'Syne',sans-serif;--fm:'DM Mono',monospace;
+      --nav:52px;--tab:56px;
+    }
+    html,body{height:100%;background:var(--bg);color:var(--text);font-family:var(--fd);overflow:hidden}
+
+    /* ── NAV ── */
+    #nav{
+      position:fixed;top:0;left:0;right:0;z-index:200;
+      height:var(--nav);display:flex;align-items:center;gap:10px;padding:0 16px;
+      background:var(--surface);border-bottom:1px solid var(--border);
+      box-shadow:0 1px 6px rgba(0,0,0,0.07);
+    }
+    .logo{font-size:16px;font-weight:700;letter-spacing:-.5px;white-space:nowrap}
+    .logo span{color:var(--accent)}
+    #status-pill{margin-left:auto;display:flex;align-items:center;gap:6px;
+      font-size:11px;font-family:var(--fm);color:var(--muted);
+      background:var(--surface2);padding:4px 10px;border-radius:20px;border:1px solid var(--border);
+      white-space:nowrap;flex-shrink:0}
+    .pdot{width:7px;height:7px;border-radius:50%;background:#2e8a1e;animation:pulse 1.6s ease infinite;flex-shrink:0}
+    .pdot.err{background:var(--coarse);animation:none}
+    @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.85)}}
+
+    /* ── BOTTOM TAB BAR ── */
+    #tabbar{
+      position:fixed;bottom:0;left:0;right:0;z-index:200;
+      height:var(--tab);display:flex;
+      background:var(--surface);border-top:1px solid var(--border);
+      box-shadow:0 -2px 8px rgba(0,0,0,0.06);
+    }
+    .tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;
+      gap:3px;font-size:10px;font-family:var(--fm);color:var(--muted);
+      cursor:pointer;transition:color .15s;border:none;background:transparent;padding:0}
+    .tab svg{width:20px;height:20px;stroke:currentColor;fill:none;stroke-width:1.8;
+      stroke-linecap:round;stroke-linejoin:round}
+    .tab.on{color:var(--fine)}
+
+    /* ── PAGES ── */
+    #pages{
+      position:fixed;top:var(--nav);bottom:var(--tab);left:0;right:0;overflow:hidden;
+    }
+    .page{position:absolute;inset:0;overflow-y:auto;display:none}
+    .page.on{display:block}
+
+    /* ── MAP PAGE ── */
+    #page-map{padding:0}
+    #map{width:100%;height:100%}
+    #map-fab{
+      position:absolute;bottom:16px;right:16px;z-index:100;
+      width:44px;height:44px;border-radius:50%;
+      background:var(--surface);border:1px solid var(--border-strong);
+      box-shadow:0 2px 10px rgba(0,0,0,0.12);
+      display:flex;align-items:center;justify-content:center;cursor:pointer;
+    }
+    #map-fab svg{width:18px;height:18px;stroke:var(--text);fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+    .spin{animation:spin .8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+
+    /* Map info chip */
+    #map-chip{
+      position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:100;
+      background:rgba(255,255,255,0.92);backdrop-filter:blur(4px);
+      border:1px solid var(--border-strong);border-radius:20px;
+      padding:5px 14px;font-size:12px;font-family:var(--fm);color:var(--muted);
+      white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,0.08);
+    }
+
+    #nodata{
+      position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);
+      z-index:50;text-align:center;color:var(--muted);font-family:var(--fm);font-size:13px;display:none
+    }
+    #nodata .big{font-size:36px;margin-bottom:10px}
+
+    /* filter strip on map */
+    #filter-strip{
+      position:absolute;bottom:70px;left:0;right:0;z-index:100;
+      display:flex;gap:6px;justify-content:center;padding:0 16px;
+    }
+    .flt{font-family:var(--fm);font-size:11px;padding:5px 12px;border-radius:20px;
+      border:1px solid var(--border-strong);background:rgba(255,255,255,0.9);
+      backdrop-filter:blur(4px);color:var(--muted);cursor:pointer;transition:all .15s;
+      box-shadow:0 1px 4px rgba(0,0,0,0.08)}
+    .flt.on{color:#fff;border-color:transparent}
+    .flt.on.all{background:#444}
+    .flt.on.fine{background:var(--fine)}
+    .flt.on.medium{background:var(--medium)}
+    .flt.on.coarse{background:var(--coarse)}
+
+    /* ── STATS PAGE ── */
+    #page-stats{padding:16px}
+    .sgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+    .scard{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px 16px}
+    .scard.full{grid-column:1/-1}
+    .scard .val{font-size:32px;font-weight:700;line-height:1;margin-bottom:4px}
+    .scard .lbl{font-size:11px;font-family:var(--fm);color:var(--muted)}
+
+    /* bar chart */
+    #bar-wrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:16px;margin-top:10px}
+    .bar-row{margin-bottom:12px}
+    .bar-row:last-child{margin-bottom:0}
+    .bar-top{display:flex;justify-content:space-between;font-size:12px;font-family:var(--fm);margin-bottom:5px}
+    .bar-bg{height:8px;background:var(--surface2);border-radius:4px;overflow:hidden}
+    .bar-fill{height:100%;border-radius:4px;transition:width .6s ease}
+
+    /* ── RECORDS PAGE ── */
+    #page-records{padding:16px}
+    .rec-search{
+      width:100%;padding:10px 14px;margin-bottom:12px;
+      border:1px solid var(--border-strong);border-radius:var(--rs);
+      font-family:var(--fm);font-size:13px;background:var(--surface);color:var(--text);
+    }
+    .rec-search:focus{outline:none;border-color:var(--fine)}
+    .rec-card{
+      background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
+      padding:14px;margin-bottom:8px;display:flex;align-items:center;gap:12px;
+    }
+    .rec-dot{width:12px;height:12px;border-radius:50%;flex-shrink:0}
+    .rec-main{flex:1;min-width:0}
+    .rec-file{font-size:13px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .rec-sub{font-size:11px;font-family:var(--fm);color:var(--muted);margin-top:2px}
+    .rec-right{text-align:right;flex-shrink:0}
+    .rec-size{font-size:14px;font-weight:700}
+    .rec-unit{font-size:10px;font-family:var(--fm);color:var(--muted)}
+    .badge{display:inline-block;font-size:10px;padding:2px 8px;border-radius:10px;font-family:var(--fm)}
+    .badge.Fine{background:#ddeeff;color:var(--fine)}
+    .badge.Medium{background:#ddf2d8;color:var(--medium)}
+    .badge.Coarse{background:#fde8e8;color:var(--coarse)}
+
+    /* ── LEAFLET OVERRIDES ── */
+    .leaflet-popup-content-wrapper{
+      background:#fff;border:1px solid var(--border-strong);border-radius:var(--rs);
+      color:var(--text);font-family:var(--fm);font-size:12px;
+      box-shadow:0 4px 20px rgba(0,0,0,0.12)}
+    .leaflet-popup-tip{background:#fff}
+    .leaflet-popup-content{margin:12px 14px;line-height:1.8}
+    .leaflet-control-zoom a{background:#fff!important;color:var(--text)!important;border-color:var(--border-strong)!important}
+
+    /* scrollbar */
+    .page::-webkit-scrollbar{width:4px}
+    .page::-webkit-scrollbar-thumb{background:var(--border-strong);border-radius:2px}
+
+    /* desktop: show sidebar layout */
+    @media(min-width:768px){
+      html,body{overflow:hidden}
+      #tabbar{display:none}
+      #filter-strip{bottom:20px}
+      #pages{
+        bottom:0;
+        display:grid;
+        grid-template-columns:300px 1fr;
+        grid-template-rows:1fr;
+        overflow:hidden;
+      }
+      .page{position:relative;display:none;overflow-y:auto}
+      .page.on{display:block}
+      #page-map{
+        grid-column:2;grid-row:1;
+        display:block!important;
+        position:relative;overflow:hidden;
+      }
+      #page-stats,#page-records{
+        grid-column:1;grid-row:1;
+        border-right:1px solid var(--border);
+      }
+      /* always show stats sidebar on desktop */
+      #page-stats{display:block!important}
+      #page-records{display:none}
+      #page-records.on{display:block!important}
+      #page-stats.on{display:block!important}
+    }
+  </style>
+</head>
+<body>
+
+<!-- NAV -->
+<nav id="nav">
+  <div class="logo">Sand<span>Scan</span></div>
+  <div id="status-pill">
+    <div class="pdot" id="sdot"></div>
+    <span id="stxt">connecting…</span>
+  </div>
+</nav>
+
+<!-- PAGES -->
+<div id="pages">
+
+  <!-- MAP -->
+  <div class="page on" id="page-map">
+    <div id="map"></div>
+    <div id="nodata"><div class="big">📍</div>No data yet.<br>Waiting for ESP uploads…</div>
+    <div id="map-chip" id="chip">— markers</div>
+    <div id="filter-strip">
+      <button class="flt on all"    onclick="setFilter('All',this)">All</button>
+      <button class="flt fine"      onclick="setFilter('Fine',this)">Fine</button>
+      <button class="flt medium"    onclick="setFilter('Medium',this)">Medium</button>
+      <button class="flt coarse"    onclick="setFilter('Coarse',this)">Coarse</button>
+    </div>
+    <div id="map-fab" onclick="fetchAll()">
+      <svg id="rico" viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+    </div>
+  </div>
+
+  <!-- STATS -->
+  <div class="page" id="page-stats">
+    <div style="padding:16px">
+      <div class="sgrid">
+        <div class="scard full">
+          <div class="val" id="s-total" style="color:var(--accent)">—</div>
+          <div class="lbl">total samples</div>
+        </div>
+        <div class="scard">
+          <div class="val" id="s-fine" style="color:var(--fine)">—</div>
+          <div class="lbl">fine</div>
+        </div>
+        <div class="scard">
+          <div class="val" id="s-medium" style="color:var(--medium)">—</div>
+          <div class="lbl">medium</div>
+        </div>
+        <div class="scard">
+          <div class="val" id="s-coarse" style="color:var(--coarse)">—</div>
+          <div class="lbl">coarse</div>
+        </div>
+        <div class="scard full">
+          <div class="val" id="s-avg" style="font-size:22px">— mm</div>
+          <div class="lbl">avg grain size</div>
+        </div>
+      </div>
+
+      <div id="bar-wrap">
+        <div class="bar-row">
+          <div class="bar-top"><span style="color:var(--fine)">Fine</span><span id="bp-fine">0%</span></div>
+          <div class="bar-bg"><div class="bar-fill" id="b-fine" style="background:var(--fine);width:0%"></div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-top"><span style="color:var(--medium)">Medium</span><span id="bp-medium">0%</span></div>
+          <div class="bar-bg"><div class="bar-fill" id="b-medium" style="background:var(--medium);width:0%"></div></div>
+        </div>
+        <div class="bar-row">
+          <div class="bar-top"><span style="color:var(--coarse)">Coarse</span><span id="bp-coarse">0%</span></div>
+          <div class="bar-bg"><div class="bar-fill" id="b-coarse" style="background:var(--coarse);width:0%"></div></div>
+        </div>
+      </div>
+
+      <!-- legend -->
+      <div style="margin-top:16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--r);padding:14px">
+        <div style="font-size:10px;font-family:var(--fm);letter-spacing:1.5px;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Legend</div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-family:var(--fm);color:var(--muted);margin-bottom:8px">
+          <div style="width:12px;height:12px;border-radius:50%;background:var(--fine);flex-shrink:0"></div>Fine — &lt; 1.5 mm
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-family:var(--fm);color:var(--muted);margin-bottom:8px">
+          <div style="width:12px;height:12px;border-radius:50%;background:var(--medium);flex-shrink:0"></div>Medium — 1.5–2.5 mm
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;font-size:13px;font-family:var(--fm);color:var(--muted)">
+          <div style="width:12px;height:12px;border-radius:50%;background:var(--coarse);flex-shrink:0"></div>Coarse — &gt; 2.5 mm
+        </div>
+      </div>
+
+      <div style="margin-top:12px;font-size:11px;font-family:var(--fm);color:var(--muted);text-align:center">
+        auto-refresh every 10s · last updated: <span id="last-upd">—</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- RECORDS -->
+  <div class="page" id="page-records">
+    <div style="padding:16px">
+      <input class="rec-search" type="search" placeholder="Search file, class…" oninput="searchRecords(this.value)" id="search-box"/>
+      <div id="rec-list"></div>
+    </div>
+  </div>
+
+</div>
+
+<!-- TAB BAR (mobile only) -->
+<div id="tabbar">
+  <button class="tab on" id="tab-map" onclick="showTab('map')">
+    <svg viewBox="0 0 24 24"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+    Map
+  </button>
+  <button class="tab" id="tab-stats" onclick="showTab('stats')">
+    <svg viewBox="0 0 24 24"><line x1="18" y1="20" x2="18" y2="10"/><line x1="12" y1="20" x2="12" y2="4"/><line x1="6" y1="20" x2="6" y2="14"/></svg>
+    Stats
+  </button>
+  <button class="tab" id="tab-records" onclick="showTab('records')">
+    <svg viewBox="0 0 24 24"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+    Records
+  </button>
+</div>
+
+<script>
+const API = window.location.origin;
+let allData=[], markers=[], activeFilter='All', searchQ='';
+
+// ── MAP ──────────────────────────────────────────────────────────
+const map = L.map('map',{zoomControl:true}).setView([20,78],5);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  attribution:'&copy; OpenStreetMap contributors',maxZoom:20
+}).addTo(map);
+
+const CC={Fine:'#1a6fc4',Medium:'#2e8a1e',Coarse:'#c42020'};
+const cc=c=>CC[c]||'#7a7d85';
+
+function mkMarker(r){
+  const col=cc(r.Grain_Class);
+  const m=L.circleMarker([+r.Latitude,+r.Longitude],{
+    radius:10,color:'#fff',weight:2,fillColor:col,fillOpacity:.85
+  });
+  const ts=r.Timestamp?`<br><span style="color:#7a7d85">${r.Timestamp}</span>`:'';
+  m.bindPopup(
+    `<b style="font-size:13px">${r.Image}</b>${ts}<br>`+
+    `Lat: ${(+r.Latitude).toFixed(5)}<br>Lon: ${(+r.Longitude).toFixed(5)}<br>`+
+    `Size: <b style="color:${col}">${r.Avg_Grain_Size_mm} mm</b> · `+
+    `<b style="color:${col}">${r.Grain_Class}</b>`
+  );
+  return m;
+}
+
+function render(){
+  markers.forEach(m=>m.remove()); markers=[];
+  const fd=activeFilter==='All'?allData:allData.filter(d=>d.Grain_Class===activeFilter);
+  document.getElementById('nodata').style.display=allData.length===0?'block':'none';
+  fd.forEach(r=>{const m=mkMarker(r);m.addTo(map);markers.push(m);});
+  if(fd.length){
+    const lats=fd.map(d=>+d.Latitude),lons=fd.map(d=>+d.Longitude);
+    lats.length===1
+      ?map.setView([lats[0],lons[0]],15)
+      :map.fitBounds([[Math.min(...lats),Math.min(...lons)],[Math.max(...lats),Math.max(...lons)]],{padding:[50,50]});
+  }
+  document.getElementById('map-chip').textContent=`${fd.length} marker${fd.length!==1?'s':''}`;
+}
+
+// ── STATS ────────────────────────────────────────────────────────
+function updateStats(){
+  const d=allData, n=d.length||1;
+  const fine=d.filter(x=>x.Grain_Class==='Fine').length;
+  const medium=d.filter(x=>x.Grain_Class==='Medium').length;
+  const coarse=d.filter(x=>x.Grain_Class==='Coarse').length;
+  document.getElementById('s-total').textContent=d.length;
+  document.getElementById('s-fine').textContent=fine;
+  document.getElementById('s-medium').textContent=medium;
+  document.getElementById('s-coarse').textContent=coarse;
+  const avg=d.length?(d.reduce((s,x)=>s+parseFloat(x.Avg_Grain_Size_mm||0),0)/d.length).toFixed(3):'—';
+  document.getElementById('s-avg').textContent=avg!=='—'?avg+' mm':'— mm';
+  // bars
+  const pct=v=>d.length?Math.round(v/d.length*100):0;
+  const fp=pct(fine),mp=pct(medium),cp=pct(coarse);
+  document.getElementById('bp-fine').textContent=fp+'%';
+  document.getElementById('bp-medium').textContent=mp+'%';
+  document.getElementById('bp-coarse').textContent=cp+'%';
+  document.getElementById('b-fine').style.width=fp+'%';
+  document.getElementById('b-medium').style.width=mp+'%';
+  document.getElementById('b-coarse').style.width=cp+'%';
+}
+
+// ── RECORDS ──────────────────────────────────────────────────────
+function renderRecords(data){
+  const list=document.getElementById('rec-list');
+  if(!data.length){list.innerHTML=`<div style="text-align:center;padding:40px;font-family:var(--fm);font-size:13px;color:var(--muted)">No records found</div>`;return;}
+  list.innerHTML=data.slice().reverse().map(r=>`
+    <div class="rec-card">
+      <div class="rec-dot" style="background:${cc(r.Grain_Class)}"></div>
+      <div class="rec-main">
+        <div class="rec-file">${r.Image}</div>
+        <div class="rec-sub">${r.Timestamp||''} · ${(+r.Latitude).toFixed(4)}, ${(+r.Longitude).toFixed(4)}</div>
+      </div>
+      <div class="rec-right">
+        <div class="rec-size" style="color:${cc(r.Grain_Class)}">${r.Avg_Grain_Size_mm}</div>
+        <div class="rec-unit">mm</div>
+        <span class="badge ${r.Grain_Class}">${r.Grain_Class}</span>
+      </div>
+    </div>`).join('');
+}
+
+function searchRecords(q){
+  searchQ=q.toLowerCase();
+  const filtered=allData.filter(r=>
+    r.Image.toLowerCase().includes(searchQ)||
+    r.Grain_Class.toLowerCase().includes(searchQ)
+  );
+  renderRecords(filtered);
+}
+
+// ── FETCH ────────────────────────────────────────────────────────
+async function fetchAll(){
+  document.getElementById('rico').classList.add('spin');
+  try{
+    const res=await fetch(`${API}/data`,{signal:AbortSignal.timeout(8000)});
+    if(!res.ok) throw new Error();
+    allData=await res.json();
+    document.getElementById('sdot').className='pdot';
+    document.getElementById('stxt').textContent=`live · ${allData.length}`;
+    updateStats();
+    render();
+    renderRecords(allData);
+    document.getElementById('last-upd').textContent=new Date().toLocaleTimeString();
+  }catch{
+    document.getElementById('sdot').className='pdot err';
+    document.getElementById('stxt').textContent='error';
+  }finally{
+    document.getElementById('rico').classList.remove('spin');
+  }
+}
+
+// ── FILTER ───────────────────────────────────────────────────────
+function setFilter(cls,btn){
+  activeFilter=cls;
+  document.querySelectorAll('.flt').forEach(b=>b.classList.remove('on'));
+  btn.classList.add('on');
+  render();
+}
+
+// ── TABS (mobile) ────────────────────────────────────────────────
+function showTab(name){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('on'));
+  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('on'));
+  document.getElementById('page-'+name).classList.add('on');
+  document.getElementById('tab-'+name).classList.add('on');
+  if(name==='map') setTimeout(()=>map.invalidateSize(),50);
+}
+
+// ── BOOT ─────────────────────────────────────────────────────────
+fetchAll();
+setInterval(fetchAll,10000);
+</script>
+</body>
+</html>
