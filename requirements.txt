@@ -3,3 +3,5 @@ flask-cors
 numpy
 pandas
 gunicorn
+opencv-python-headless
+tflite-runtime
